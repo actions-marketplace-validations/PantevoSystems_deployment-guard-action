@@ -1,6 +1,6 @@
 # 🛡️ Deployment Guard Action
 
-KI-gestützter Risk Score vor jedem Deployment. Analysiert Code-Änderungen automatisch und blockiert riskante Deployments.
+Deterministischer Risk Score vor jedem Deployment. Analysiert Code-Änderungen automatisch und blockiert riskante Deployments. Nachvollziehbare Formel, keine Black Box.
 
 **Von [PantevoSystems](https://www.pantevosystems.com)**
 
@@ -72,7 +72,7 @@ Für vollständigen DevSecOps-Stack — Trivy + Semgrep + Checkov werden ausgef�
 ```yaml
 jobs:
   security:
-    uses: PantevoSystems/pipeline-security-templates/.github/workflows/full-stack-with-guard.yml@v1.2.0.1.1
+    uses: PantevoSystems/pipeline-security-templates/.github/workflows/full-stack-with-guard.yml@v1.2.0
     permissions:
       contents: read
       security-events: write
@@ -113,7 +113,7 @@ Templates: [PantevoSystems/pipeline-security-templates](https://github.com/Pante
 | `score` | Risk Score (0–100) |
 | `verdict` | LOW RISK / MEDIUM RISK / HIGH RISK / CRITICAL RISK |
 | `status` | PASS / WARN / BLOCKED |
-| `explanation` | KI-Erklärung des Scores auf Deutsch |
+| `explanation` | Erklärung des Scores in verständlicher Sprache |
 
 ---
 
@@ -179,13 +179,16 @@ Felder: `trivy-critical-cves`, `trivy-high-cves`, `semgrep-findings`, `semgrep-h
 
 ### Gewichtung der Faktoren
 
-| Faktor | Gewicht | Beschreibung |
-|---|---|---|
-| Diff-Komplexität | 30%* | Geänderte Zeilen und Dateien (logarithmische Skala) |
-| Kubernetes-Risiko | 30%* | Manifeste, Helm-Charts, ArgoCD-Status, Single Replica, fehlendes PDB |
-| Dependency-Risiko | 20%* | Dependency-Updates, Major Version Bumps |
-| Fehlerhistorie | 20%* | Vorfälle der letzten 7 und 30 Tage |
-| Pipeline-Findings | 15%* | Optional · Trivy CVEs, Semgrep SAST, Checkov IaC |
+Jeder Faktor wird für sich auf einer Skala von 0 bis 100 berechnet. Wie stark er in den Gesamtscore einfließt, hängt vom Kontext des Repositories ab:
+
+| Modus | Diff | K8s | Dependencies | Fehlerhistorie | Findings |
+|---|---|---|---|---|---|
+| ohne K8s, ohne Findings | 42% | — | 32% | 26% | — |
+| mit K8s, ohne Findings | 30% | 30% | 20% | 20% | — |
+| ohne K8s, mit Findings | 36% | — | 27% | 22% | 15% |
+| mit K8s, mit Findings | 26% | 26% | 17% | 16% | 15% |
+
+Das sind die Standardwerte. Wird der Repo-Typ erkannt, überschreiben typspezifische Gewichtungen diese Tabelle — in einem Infrastructure-Repo zählt Kubernetes bis zu 55 Prozent, in einer Library zählen Dependencies bis zu 50 Prozent.
 
 *Adaptive Gewichtung — die Gewichte ändern sich je nach Repo-Kontext (mit/ohne K8s, mit/ohne Pipeline-Findings). Frontend-Repos ohne K8s bekommen genauso faire Scores wie Full-Stack-Repos mit Helm und Pipeline-Scans.
 

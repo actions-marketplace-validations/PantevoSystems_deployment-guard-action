@@ -234,6 +234,8 @@ SCORE=$(echo "$BODY"       | grep -o '"score":[0-9]*'           | cut -d: -f2)
 STATUS=$(echo "$BODY"      | grep -o '"status":"[^"]*"'          | cut -d'"' -f4)
 VERDICT=$(echo "$BODY"     | grep -o '"verdict":"[^"]*"'         | cut -d'"' -f4)
 EXPLANATION=$(echo "$BODY" | grep -o '"explanation":"[^"]*"'     | cut -d'"' -f4)
+BREAKDOWN=$(echo "$BODY" | sed -n 's/.*"breakdown_text":"\([^"]*\)".*/\1/p')
+
 
 echo "score=${SCORE}"               >> $GITHUB_OUTPUT
 echo "status=${STATUS}"             >> $GITHUB_OUTPUT
@@ -251,6 +253,12 @@ echo "  ────────────────────────
 echo "  Score:   ${SCORE} / 100"
 echo "  Verdict: ${VERDICT}"
 echo "  Status:  ${STATUS}"
+
+if [ -n "$BREAKDOWN" ]; then
+  echo "  ─────────────────────────────────────"
+  printf '%b\n' "$BREAKDOWN"
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 if [ -n "$EXPLANATION" ]; then
