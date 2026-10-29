@@ -1,5 +1,7 @@
 # 🛡️ Deployment Guard Action
 
+[![Deployment Guard](https://api.pantevosystems.com/badge/2Yg2FpGsCnQ60zKgsURzH5fk3myKtoX5.svg)](https://www.pantevosystems.com)
+
 Deterministischer Risk Score vor jedem Deployment. Analysiert Code-Änderungen automatisch und blockiert riskante Deployments. Nachvollziehbare Formel, keine Black Box.
 
 **Von [PantevoSystems](https://www.pantevosystems.com)** · [English](README.md)
@@ -11,7 +13,7 @@ Deterministischer Risk Score vor jedem Deployment. Analysiert Code-Änderungen a
 ```yaml
 - uses: actions/checkout@v4
   with:
-    fetch-depth: 2
+    fetch-depth: 0
 
 - name: Deployment Guard
   uses: PantevoSystems/deployment-guard-action@v1
@@ -19,7 +21,37 @@ Deterministischer Risk Score vor jedem Deployment. Analysiert Code-Änderungen a
     api-key: ${{ secrets.GUARD_API_KEY }}
 ```
 
-> ⚠️ `fetch-depth: 2` ist erforderlich — ohne den vorherigen Commit kann kein Diff berechnet werden.
+> ⚠️ **Vollständige Historie nötig.** `fetch-depth: 0` verwenden (empfohlen). `fetch-depth: 2` reicht nur für Pushes mit einem einzigen Commit — bei Pushes mit mehreren Commits oder bei Pull Requests fehlt sonst der Basis-Commit. Die Action vergleicht gegen `github.event.before` (Push), `pull_request.base.sha` (Pull Request) oder `HEAD~1` (Fallback); über die Env-Variable `GUARD_DIFF_BASE` lässt sich die Basis überschreiben. Fehlt der Basis-Commit in einem flachen Clone, **schlägt der Schritt fehl**, statt still einen leeren Diff zu bewerten.
+
+> 🏷️ **Tag-, Release- und `workflow_dispatch`-Deploys:** Diese Events liefern keinen brauchbaren „before“-Commit. Die Action fällt dann auf `HEAD~1` zurück und bewertet nur den letzten Commit. Im Log steht dann `[guard] WARNING: diff base fell back to HEAD~1` plus eine Workflow-Warnung. Für solche Deploys `GUARD_DIFF_BASE` setzen (z. B. auf den zuletzt deployten Tag oder SHA):
+>
+> ```yaml
+> env:
+>   GUARD_DIFF_BASE: ${{ steps.last-deploy.outputs.sha }}   # z. B. der vorherige Release-Tag
+> ```
+
+> 📌 **Pinning:** `@v1` (Major-Tag) referenzieren oder — für maximale Supply-Chain-Sicherheit — einen vollständigen Commit-SHA (`PantevoSystems/deployment-guard-action@<sha> # v1.x.y`). Niemals `@main`.
+
+---
+
+## Welche Daten die Action sendet
+
+Pro Lauf geht eine JSON-Anfrage an `<api-url>/analyze`. Sie enthält:
+
+- Repository-Name (`owner/repo`), Branch-Name und Commit-SHA
+- die **Pfade** der geänderten Dateien (max. 500 Pfade, je max. 300 Zeichen) — **keine Dateiinhalte**
+- Zeilen- und Dateizahlen des Diffs (Zeilen hinzugefügt / entfernt, geänderte Dateien)
+- Kubernetes-/Helm-Flags: Anzahl geänderter Manifeste, single replica, missing PDB, Helm-Values geändert, Chart gebumpt
+- Änderungen an Dependency-Dateien und Anzahl der Major-Version-Bumps
+- Trefferzahlen aus Trivy, Semgrep und Checkov (sofern übergeben)
+- Anzahl der Produktionsvorfälle der letzten 7 / 30 Tage (sofern übergeben)
+- Repo-Typ-Indikatoren (Dockerfile, Python-/Node-Dependencies, Terraform, `setup.py` vorhanden: ja/nein)
+- ab v1.9.0 Git-Kennzahlen als reine Zahlen: Anzahl betroffener Verzeichnisse, Streuung der Änderung, Anzahl der Personen und Commits, die diese Dateien im letzten Jahr geändert haben, bisherige Commits des Autors, Reverts und Hotfixes der letzten 7 / 30 Tage
+- ab v1.9.0 die SHAs der Commits, die dieser Push per `git revert` rückgängig macht, und ob der Push ein Hotfix ist (Commit-Betreff beginnt mit `hotfix`). Damit wird gemessen, wie treffsicher frühere Scores waren.
+
+Nicht übertragen werden Quellcode, Diff-Inhalte, Dateiinhalte, Commit-Messages, Namen und E-Mail-Adressen. Die Git-Kennzahlen werden auf dem Runner berechnet; bei einem flachen Clone werden sie nicht gesendet.
+
+Der Risk Score ist eine **deterministische Formel** — gleiche Eingabe, gleiches Ergebnis. Kein Sprachmodell ist an der Berechnung beteiligt. Den Erklärungstext erzeugt anschließend ein Sprachmodell von OpenAI aus den berechneten Faktoren und den geänderten Dateipfaden; auf den Score hat er keinen Einfluss.
 
 ---
 
@@ -30,7 +62,7 @@ name: Deploy
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
 
 jobs:
   risk-check:
@@ -38,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Deployment Guard
         id: guard
@@ -50,10 +82,15 @@ jobs:
           incidents-last-30d: '0'
 
       - name: Score anzeigen
+        # Outputs über env übergeben — nie ${{ }} direkt in run: einsetzen
+        env:
+          SCORE: ${{ steps.guard.outputs.score }}
+          STATUS: ${{ steps.guard.outputs.status }}
+          VERDICT: ${{ steps.guard.outputs.verdict }}
         run: |
-          echo "Score:   ${{ steps.guard.outputs.score }}"
-          echo "Status:  ${{ steps.guard.outputs.status }}"
-          echo "Verdict: ${{ steps.guard.outputs.verdict }}"
+          echo "Score:   $SCORE"
+          echo "Status:  $STATUS"
+          echo "Verdict: $VERDICT"
 
   deploy:
     needs: risk-check
@@ -72,7 +109,7 @@ Für vollständigen DevSecOps-Stack — Trivy + Semgrep + Checkov werden ausgef�
 ```yaml
 jobs:
   security:
-    uses: PantevoSystems/pipeline-security-templates/.github/workflows/full-stack-with-guard.yml@v1.2.0
+    uses: PantevoSystems/pipeline-security-templates/.github/workflows/full-stack-with-guard.yml@v1.2.5
     permissions:
       contents: read
       security-events: write
@@ -93,8 +130,10 @@ Templates: [PantevoSystems/pipeline-security-templates](https://github.com/Pante
 
 | Input | Beschreibung | Pflicht | Standard |
 |---|---|---|---|
-| `api-key` | Deployment Guard API Key | ✅ | — |
-| `fail-on-blocked` | Pipeline bei BLOCKED fehlschlagen lassen | ❌ | `true` |
+| `api-key` | Deployment Guard API Key (leer → Schritt schlägt fehl) | ✅ | — |
+| `fail-on-blocked` | Pipeline bei BLOCKED fehlschlagen lassen (nur `true`/`false` — jeder andere Wert lässt den Schritt fehlschlagen) | ❌ | `true` |
+| `fail-open` | `true`: nur Ausfälle — API nicht erreichbar/Timeout, HTTP 429, HTTP 5xx oder ungültiger Body bei HTTP 200 — erzeugen eine Warnung, das Deployment läuft weiter. `false`: diese Fälle lassen den Schritt fehlschlagen. Alle anderen HTTP-Status schlagen immer fehl | ❌ | `true` |
+| `api-url` | Basis-URL der API (muss `https://` sein) | ❌ | `https://api.pantevosystems.com` |
 | `incidents-last-7d` | Produktionsvorfälle letzte 7 Tage (manuell angeben) | ❌ | `0` |
 | `incidents-last-30d` | Produktionsvorfälle letzte 30 Tage (manuell angeben) | ❌ | `0` |
 | `trivy-critical-cves` | Anzahl CRITICAL CVEs aus Trivy (CVSS ≥ 9.0) | ❌ | `0` |
@@ -103,6 +142,28 @@ Templates: [PantevoSystems/pipeline-security-templates](https://github.com/Pante
 | `semgrep-high-severity` | HIGH-Severity Semgrep-Findings (level=error) | ❌ | `0` |
 | `checkov-failed-checks` | Fehlgeschlagene Checkov-Checks | ❌ | `0` |
 | `checkov-critical-failures` | CRITICAL Checkov-Failures | ❌ | `0` |
+| `diff-changed-paths` | Komma-separierte Liste geänderter Pfade (überschreibt die automatische Erkennung) | ❌ | — |
+
+Alle Zahlen-Inputs müssen nicht-negative ganze Zahlen sein — alles andere lässt den Schritt fehlschlagen.
+
+---
+
+## Fehlerverhalten (standardmäßig Advisory Gate)
+
+| Situation | `fail-open: 'true'` (Standard) | `fail-open: 'false'` |
+|---|---|---|
+| API nicht erreichbar / Timeout | ⚠️ Warnung, Deployment läuft weiter | ❌ Schritt schlägt fehl |
+| HTTP 429 (Analyse-Limit) | ⚠️ Warnung, Deployment läuft weiter | ❌ Schritt schlägt fehl |
+| HTTP 5xx | ⚠️ Warnung, Deployment läuft weiter | ❌ Schritt schlägt fehl |
+| HTTP 200 mit ungültigem Body (kein JSON, Status nicht PASS/WARN/BLOCKED, ungültiger Score) | ⚠️ Warnung, Deployment läuft weiter | ❌ Schritt schlägt fehl |
+| `api-key` leer | ❌ immer Fehler | ❌ immer Fehler |
+| HTTP 401/403 (ungültiger API Key) | ❌ immer Fehler | ❌ immer Fehler |
+| HTTP 400/422 (Anfrage abgelehnt) | ❌ immer Fehler | ❌ immer Fehler |
+| Jeder andere Status: 3xx-Redirect (wird nie verfolgt — der Key geht nicht weiter), 402, 404, 405, 407, 413, … | ❌ immer Fehler | ❌ immer Fehler |
+| `fail-open` / `fail-on-blocked` nicht exakt `true` oder `false` | ❌ immer Fehler | ❌ immer Fehler |
+| Basis-Commit fehlt (flacher Clone) | ❌ immer Fehler | ❌ immer Fehler |
+
+Deployment Guard ist ein Advisory Gate: Ein Ausfall unserer API (Netzwerk, Timeout, 429, 5xx, kaputter 200-Body) stoppt nie eure Deployments. Alles andere — Fehlkonfiguration (fehlender oder falscher Key, ungültige Eingaben, falsche `api-url`, Proxy oder Redirect) — schlägt immer fehl, damit das Gate nicht versehentlich umgangen wird. Wer ohne Score nie deployen will, setzt `fail-open: 'false'`.
 
 ---
 
@@ -123,7 +184,9 @@ Die Action erkennt folgende Faktoren automatisch aus dem Git-Diff:
 
 ### Diff-Komplexität
 - Anzahl geänderter Zeilen (hinzugefügt + entfernt)
-- Anzahl geänderter Dateien
+- Anzahl geänderter Dateien (Binärdateien zählen als geänderte Datei ohne Zeilenzahl)
+
+> 🔒 **`.gitattributes` kann keine Änderungen verstecken.** Alle Diffs laufen mit deaktivierten Repo-Attributen (`attr.tree` = leerer Baum, git ≥ 2.40). Ein `* -diff` oder `binary` in `.gitattributes` drückt die Zeilenzahlen also nicht auf 0. Eine geänderte `.gitattributes` wird im Log markiert.
 
 ### Kubernetes-Risiko
 Erkennt echte K8s-Manifeste anhand des `kind:` Feldes. Ausgeschlossen werden:
@@ -153,7 +216,7 @@ Erkennt Major-Upgrades automatisch in:
 - `go.mod` — `/vX` Module-Pfade verglichen
 
 ### Fehlerhistorie
-Wird **nicht** automatisch erkannt — muss manuell übergeben werden:
+Für den aktuellen Score (1.0) **nicht** automatisch erkannt — manuell übergeben. Ab v1.9.0 zählt die Action zusätzlich Reverts und Hotfixes der letzten 7 / 30 Tage aus der Git-Historie; die kommende Score-Version 2.0 nutzt davon den höheren Wert:
 
 ```yaml
 - name: Deployment Guard
@@ -228,7 +291,7 @@ Die Action sendet diese Indikatoren automatisch ans Backend — keine manuelle K
 Die Action erkennt K8s-Manifeste anhand des `kind:` Feldes. Prüfe:
 - Enthält deine YAML-Datei `kind: Deployment` / `kind: Service` etc.?
 - Liegt die Datei nicht in `.github/` oder `templates/`?
-- Ist `fetch-depth: 2` gesetzt?
+- Ist `fetch-depth: 0` bei `actions/checkout` gesetzt?
 
 ### Score ist immer LOW obwohl viel geändert wurde
 
@@ -280,6 +343,20 @@ Nach der Analyse folgt die Score-Aufschlüsselung — jeder Faktor mit Wert, Gew
 1. [pantevosystems.com/signup](https://www.pantevosystems.com/signup) → Free Plan (kostenlos, keine Kreditkarte)
 2. API Key als GitHub Secret anlegen: **Settings → Secrets and variables → Actions → New repository secret → `GUARD_API_KEY`**
 3. Action einbinden — fertig
+
+---
+
+## Score-Badge
+
+Zeig den letzten Risk Score deines Repositories direkt in der README — so wie oben auf dieser Seite:
+
+```markdown
+[![Deployment Guard](https://api.pantevosystems.com/badge/DEIN-TOKEN.svg)](https://www.pantevosystems.com)
+```
+
+Den Badge legst du im [Dashboard](https://www.pantevosystems.com/dashboard) unter **Einstellungen → Integrationen → Score-Badge** an und kopierst das fertige Markdown. Die Farbe folgt deinen eigenen Schwellenwerten — grün unterhalb von WARN, orange dazwischen, rot ab BLOCKED.
+
+Die URL enthält einen zufälligen Token. Weder Repository-Name noch Account lassen sich daraus ableiten, sichtbar ist ausschließlich der aktuelle Score. Über das Dashboard lässt sich ein Badge jederzeit widerrufen.
 
 ---
 

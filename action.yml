@@ -1,5 +1,5 @@
 name: 'Deployment Guard'
-description: 'Deterministic risk score before every deployment. Scores your diff and Kubernetes changes, blocks risky deploys.'
+description: 'Deterministic risk score for every deployment. Blocks risky deploys based on diff, Kubernetes changes and scanner findings.'
 author: 'PantevoSystems'
 
 branding:
@@ -8,10 +8,18 @@ branding:
 
 inputs:
   api-key:
-    description: 'Deployment Guard API key (from pantevosystems.com/signup)'
+    description: 'Deployment Guard API key (from pantevosystems.com/signup). Required — the step fails when it is empty.'
     required: true
+  api-url:
+    description: 'Deployment Guard API base URL (must be https://)'
+    required: false
+    default: 'https://api.pantevosystems.com'
+  fail-open:
+    description: "Default 'true': only outages (network error/timeout, HTTP 429, HTTP 5xx, or an invalid body on HTTP 200) print a warning and the deployment continues. Set 'false' to fail closed. Every other HTTP status (redirects, 401/402/403/404/413/422, ...) always fails."
+    required: false
+    default: 'true'
   fail-on-blocked:
-    description: 'Fail the pipeline when the status is BLOCKED'
+    description: "Fail the pipeline when the status is BLOCKED ('true' or 'false', anything else fails the step)"
     required: false
     default: 'true'
   incidents-last-7d:
@@ -54,25 +62,28 @@ inputs:
 outputs:
   score:
     description: 'Risk score (0-100)'
+    value: ${{ steps.analyze.outputs.score }}
   verdict:
     description: 'Verdict (LOW RISK / MEDIUM RISK / HIGH RISK / CRITICAL RISK)'
+    value: ${{ steps.analyze.outputs.verdict }}
   status:
-    description: 'Status (PASS / WARN / BLOCKED)'
+    description: 'Status (PASS / WARN / BLOCKED). Decided by the API using the thresholds from your dashboard.'
+    value: ${{ steps.analyze.outputs.status }}
   explanation:
     description: 'Plain-language explanation of the score'
+    value: ${{ steps.analyze.outputs.explanation }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Make script executable
-      shell: bash
-      run: chmod +x ${{ github.action_path }}/scripts/analyze.sh
-
     - name: Run Deployment Guard Analysis
+      id: analyze
       shell: bash
-      run: ${{ github.action_path }}/scripts/analyze.sh
+      run: bash "${GITHUB_ACTION_PATH}/scripts/analyze.sh"
       env:
         GUARD_API_KEY: ${{ inputs.api-key }}
+        API_URL: ${{ inputs.api-url }}
+        FAIL_OPEN: ${{ inputs.fail-open }}
         FAIL_ON_BLOCKED: ${{ inputs.fail-on-blocked }}
         INCIDENTS_7D: ${{ inputs.incidents-last-7d }}
         INCIDENTS_30D: ${{ inputs.incidents-last-30d }}
@@ -85,4 +96,6 @@ runs:
         GITHUB_REPO: ${{ github.repository }}
         GITHUB_BRANCH: ${{ github.ref_name }}
         GITHUB_SHA: ${{ github.sha }}
+        GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+        GITHUB_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         DIFF_CHANGED_PATHS: ${{ inputs.diff-changed-paths }}
